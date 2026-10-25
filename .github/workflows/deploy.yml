@@ -36,6 +36,7 @@ jobs:
           user: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local_dir: "./build"
+          ssl_check_hostname: "false"
 
       - name: Unzip deploy files
         uses: appleboy/ssh-action@master
