@@ -13,6 +13,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download latest release
         id: release
         env:
@@ -44,6 +47,11 @@ jobs:
           echo DB_PASSWORD="${{ secrets.DB_PASSWORD }}" >> .env
           zip -j "build/${{ steps.release.outputs.archive }}" .env
           rm .env
+
+      - name: Replace root .htaccess
+        run: |
+          set -euo pipefail
+          zip -j "build/${{ steps.release.outputs.archive }}" .htaccess
 
       - name: Upload via FTP
         uses: airvzxf/ftp-deployment-action@latest

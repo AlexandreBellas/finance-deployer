@@ -1,0 +1,13 @@
+# Hostinger keeps this folder as the document root.
+# Firefly III is served from public/.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ /public/$1 [L]
+</IfModule>
+
+Options -Indexes
+
+<FilesMatch "^\.env">
+    Deny from all
+</FilesMatch>
