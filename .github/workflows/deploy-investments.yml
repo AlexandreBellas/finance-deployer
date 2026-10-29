@@ -103,6 +103,15 @@ jobs:
             echo DAILY_CHANGE_TIME="${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}"
             echo REGISTRATION_ENABLED="${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}"
             echo BASE_CURRENCY="${{ secrets.INVESTMENTS_BASE_CURRENCY }}"
+            echo DB_CONNECTION=mysql
+            echo DB_HOST=localhost
+            echo DB_PORT=3306
+            echo DB_DATABASE="${{ secrets.INVESTMENTS_DB_DATABASE }}"
+            echo DB_USERNAME="${{ secrets.INVESTMENTS_DB_USERNAME }}"
+            echo DB_PASSWORD="${{ secrets.INVESTMENTS_DB_PASSWORD }}"
+            echo CACHE_STORE=database
+            echo QUEUE_CONNECTION=database
+            echo SESSION_DRIVER=database
           } > .env
           chmod 600 .env
 
@@ -126,6 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           cp .htaccess build/app/.htaccess
+          cp deploy/mysql/*.php build/app/database/migrations/
           rm -rf release
           mkdir -p release
           (
