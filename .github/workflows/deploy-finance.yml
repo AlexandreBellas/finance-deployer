@@ -36,16 +36,16 @@ jobs:
         run: |
           echo APP_ENV=production > .env
           echo APP_DEBUG=false >> .env
-          echo APP_KEY="${{ secrets.FIREFLY_APP_KEY }}" >> .env
-          echo APP_URL="${{ secrets.FIREFLY_APP_URL }}" >> .env
+          echo APP_KEY="${{ secrets.FINANCE_APP_KEY }}" >> .env
+          echo APP_URL="${{ secrets.FINANCE_APP_URL }}" >> .env
           echo TZ=America/Sao_Paulo >> .env
-          echo SITE_OWNER="${{ secrets.FIREFLY_SITE_OWNER }}" >> .env
-          echo DB_CONNECTION="${{ secrets.FIREFLY_DB_CONNECTION }}" >> .env
-          echo DB_HOST="${{ secrets.FIREFLY_DB_HOST }}" >> .env
-          echo DB_PORT="${{ secrets.FIREFLY_DB_PORT }}" >> .env
-          echo DB_DATABASE="${{ secrets.FIREFLY_DB_DATABASE }}" >> .env
-          echo DB_USERNAME="${{ secrets.FIREFLY_DB_USERNAME }}" >> .env
-          echo DB_PASSWORD="${{ secrets.FIREFLY_DB_PASSWORD }}" >> .env
+          echo SITE_OWNER="${{ secrets.FINANCE_SITE_OWNER }}" >> .env
+          echo DB_CONNECTION="${{ secrets.FINANCE_DB_CONNECTION }}" >> .env
+          echo DB_HOST="${{ secrets.FINANCE_DB_HOST }}" >> .env
+          echo DB_PORT="${{ secrets.FINANCE_DB_PORT }}" >> .env
+          echo DB_DATABASE="${{ secrets.FINANCE_DB_DATABASE }}" >> .env
+          echo DB_USERNAME="${{ secrets.FINANCE_DB_USERNAME }}" >> .env
+          echo DB_PASSWORD="${{ secrets.FINANCE_DB_PASSWORD }}" >> .env
           zip -j "build/${{ steps.release.outputs.archive }}" .env
           rm .env
 
@@ -57,9 +57,9 @@ jobs:
       - name: Upload via FTP
         uses: airvzxf/ftp-deployment-action@latest
         with:
-          server: ${{ secrets.FIREFLY_FTP_SERVER }}
-          user: ${{ secrets.FIREFLY_FTP_USERNAME }}
-          password: ${{ secrets.FIREFLY_FTP_PASSWORD }}
+          server: ${{ secrets.FINANCE_FTP_SERVER }}
+          user: ${{ secrets.FINANCE_FTP_USERNAME }}
+          password: ${{ secrets.FINANCE_FTP_PASSWORD }}
           local_dir: "./build"
           ssl_check_hostname: "false"
 
