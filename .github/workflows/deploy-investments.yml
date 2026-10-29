@@ -21,62 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check secrets and write .env
-        env:
-          INVESTMENTS_FTP_SERVER: ${{ secrets.INVESTMENTS_FTP_SERVER }}
-          INVESTMENTS_FTP_USERNAME: ${{ secrets.INVESTMENTS_FTP_USERNAME }}
-          INVESTMENTS_FTP_PASSWORD: ${{ secrets.INVESTMENTS_FTP_PASSWORD }}
-          INVESTMENTS_SSH_REMOTE_HOST: ${{ secrets.INVESTMENTS_SSH_REMOTE_HOST }}
-          INVESTMENTS_SSH_REMOTE_USER: ${{ secrets.INVESTMENTS_SSH_REMOTE_USER }}
-          INVESTMENTS_SSH_REMOTE_PASSWORD: ${{ secrets.INVESTMENTS_SSH_REMOTE_PASSWORD }}
-          INVESTMENTS_SSH_REMOTE_PORT: ${{ secrets.INVESTMENTS_SSH_REMOTE_PORT }}
-          INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
-          INVESTMENTS_PHP_BIN: ${{ secrets.INVESTMENTS_PHP_BIN }}
-          INVESTMENTS_APP_NAME: ${{ secrets.INVESTMENTS_APP_NAME }}
-          INVESTMENTS_APP_ENV: ${{ secrets.INVESTMENTS_APP_ENV }}
-          INVESTMENTS_APP_KEY: ${{ secrets.INVESTMENTS_APP_KEY }}
-          INVESTMENTS_APP_DEBUG: ${{ secrets.INVESTMENTS_APP_DEBUG }}
-          INVESTMENTS_APP_URL: ${{ secrets.INVESTMENTS_APP_URL }}
-          INVESTMENTS_ASSET_URL: ${{ secrets.INVESTMENTS_ASSET_URL }}
-          INVESTMENTS_APP_TIMEZONE: ${{ secrets.INVESTMENTS_APP_TIMEZONE }}
-          INVESTMENTS_APP_LOCALE: ${{ secrets.INVESTMENTS_APP_LOCALE }}
-          INVESTMENTS_SELF_HOSTED: ${{ secrets.INVESTMENTS_SELF_HOSTED }}
-          INVESTMENTS_REGISTRATION_ENABLED: ${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}
-          INVESTMENTS_AI_CHAT_ENABLED: ${{ secrets.INVESTMENTS_AI_CHAT_ENABLED }}
-          INVESTMENTS_LOG_CHANNEL: ${{ secrets.INVESTMENTS_LOG_CHANNEL }}
-          INVESTMENTS_LOG_LEVEL: ${{ secrets.INVESTMENTS_LOG_LEVEL }}
-          INVESTMENTS_FILESYSTEM_DISK: ${{ secrets.INVESTMENTS_FILESYSTEM_DISK }}
-          INVESTMENTS_SESSION_DRIVER: ${{ secrets.INVESTMENTS_SESSION_DRIVER }}
-          INVESTMENTS_QUEUE_CONNECTION: ${{ secrets.INVESTMENTS_QUEUE_CONNECTION }}
-          INVESTMENTS_CACHE_STORE: ${{ secrets.INVESTMENTS_CACHE_STORE }}
-          INVESTMENTS_DB_CONNECTION: ${{ secrets.INVESTMENTS_DB_CONNECTION }}
-          INVESTMENTS_DB_HOST: ${{ secrets.INVESTMENTS_DB_HOST }}
-          INVESTMENTS_DB_PORT: ${{ secrets.INVESTMENTS_DB_PORT }}
-          INVESTMENTS_DB_DATABASE: ${{ secrets.INVESTMENTS_DB_DATABASE }}
-          INVESTMENTS_DB_USERNAME: ${{ secrets.INVESTMENTS_DB_USERNAME }}
-          INVESTMENTS_DB_PASSWORD: ${{ secrets.INVESTMENTS_DB_PASSWORD }}
-          INVESTMENTS_MARKET_DATA_PROVIDER: ${{ secrets.INVESTMENTS_MARKET_DATA_PROVIDER }}
-          INVESTMENTS_MARKET_DATA_REFRESH: ${{ secrets.INVESTMENTS_MARKET_DATA_REFRESH }}
-          INVESTMENTS_BASE_CURRENCY: ${{ secrets.INVESTMENTS_BASE_CURRENCY }}
-          INVESTMENTS_MAIL_MAILER: ${{ secrets.INVESTMENTS_MAIL_MAILER }}
-          INVESTMENTS_MAIL_FROM_ADDRESS: ${{ secrets.INVESTMENTS_MAIL_FROM_ADDRESS }}
-          INVESTMENTS_MAIL_FROM_NAME: ${{ secrets.INVESTMENTS_MAIL_FROM_NAME }}
-          INVESTMENTS_DAILY_CHANGE_TIME: ${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}
-          INVESTMENTS_ALPHAVANTAGE_API_KEY: ${{ secrets.INVESTMENTS_ALPHAVANTAGE_API_KEY }}
-          INVESTMENTS_FINNHUB_API_KEY: ${{ secrets.INVESTMENTS_FINNHUB_API_KEY }}
-          INVESTMENTS_ALPACA_API_KEY: ${{ secrets.INVESTMENTS_ALPACA_API_KEY }}
-          INVESTMENTS_ALPACA_API_SECRET: ${{ secrets.INVESTMENTS_ALPACA_API_SECRET }}
-          INVESTMENTS_TWELVEDATA_API_SECRET: ${{ secrets.INVESTMENTS_TWELVEDATA_API_SECRET }}
-          INVESTMENTS_CHAT_PROVIDER: ${{ secrets.INVESTMENTS_CHAT_PROVIDER }}
-          INVESTMENTS_CHAT_MODEL: ${{ secrets.INVESTMENTS_CHAT_MODEL }}
-          INVESTMENTS_OPENAI_API_KEY: ${{ secrets.INVESTMENTS_OPENAI_API_KEY }}
-          INVESTMENTS_MAIL_HOST: ${{ secrets.INVESTMENTS_MAIL_HOST }}
-          INVESTMENTS_MAIL_PORT: ${{ secrets.INVESTMENTS_MAIL_PORT }}
-          INVESTMENTS_MAIL_USERNAME: ${{ secrets.INVESTMENTS_MAIL_USERNAME }}
-          INVESTMENTS_MAIL_PASSWORD: ${{ secrets.INVESTMENTS_MAIL_PASSWORD }}
-          INVESTMENTS_MAIL_ENCRYPTION: ${{ secrets.INVESTMENTS_MAIL_ENCRYPTION }}
-        run: bash deploy/fill-env.sh "${RUNNER_TEMP:?}/investments.env"
-
       - name: Download latest release
         id: release
         env:
@@ -136,11 +80,60 @@ jobs:
           rm -rf node_modules tests docker
           rm -f public/hot
 
+      - name: Fill .env from secrets
+        working-directory: build/app
+        run: |
+          set -euo pipefail
+          {
+            echo APP_NAME="${{ secrets.INVESTMENTS_APP_NAME }}"
+            echo APP_ENV="${{ secrets.INVESTMENTS_APP_ENV }}"
+            echo APP_KEY="${{ secrets.INVESTMENTS_APP_KEY }}"
+            echo APP_DEBUG="${{ secrets.INVESTMENTS_APP_DEBUG }}"
+            echo APP_URL="${{ secrets.INVESTMENTS_APP_URL }}"
+            echo ASSET_URL="${{ secrets.INVESTMENTS_ASSET_URL }}"
+            echo APP_TIMEZONE="${{ secrets.INVESTMENTS_APP_TIMEZONE }}"
+            echo APP_LOCALE="${{ secrets.INVESTMENTS_APP_LOCALE }}"
+            echo SELF_HOSTED="${{ secrets.INVESTMENTS_SELF_HOSTED }}"
+            echo REGISTRATION_ENABLED="${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}"
+            echo AI_CHAT_ENABLED="${{ secrets.INVESTMENTS_AI_CHAT_ENABLED }}"
+            echo LOG_CHANNEL="${{ secrets.INVESTMENTS_LOG_CHANNEL }}"
+            echo LOG_LEVEL="${{ secrets.INVESTMENTS_LOG_LEVEL }}"
+            echo FILESYSTEM_DISK="${{ secrets.INVESTMENTS_FILESYSTEM_DISK }}"
+            echo SESSION_DRIVER="${{ secrets.INVESTMENTS_SESSION_DRIVER }}"
+            echo QUEUE_CONNECTION="${{ secrets.INVESTMENTS_QUEUE_CONNECTION }}"
+            echo CACHE_STORE="${{ secrets.INVESTMENTS_CACHE_STORE }}"
+            echo DB_CONNECTION="${{ secrets.INVESTMENTS_DB_CONNECTION }}"
+            echo DB_HOST="${{ secrets.INVESTMENTS_DB_HOST }}"
+            echo DB_PORT="${{ secrets.INVESTMENTS_DB_PORT }}"
+            echo DB_DATABASE="${{ secrets.INVESTMENTS_DB_DATABASE }}"
+            echo DB_USERNAME="${{ secrets.INVESTMENTS_DB_USERNAME }}"
+            echo DB_PASSWORD="${{ secrets.INVESTMENTS_DB_PASSWORD }}"
+            echo MARKET_DATA_PROVIDER="${{ secrets.INVESTMENTS_MARKET_DATA_PROVIDER }}"
+            echo MARKET_DATA_REFRESH="${{ secrets.INVESTMENTS_MARKET_DATA_REFRESH }}"
+            echo BASE_CURRENCY="${{ secrets.INVESTMENTS_BASE_CURRENCY }}"
+            echo MAIL_MAILER="${{ secrets.INVESTMENTS_MAIL_MAILER }}"
+            echo MAIL_FROM_ADDRESS="${{ secrets.INVESTMENTS_MAIL_FROM_ADDRESS }}"
+            echo MAIL_FROM_NAME="${{ secrets.INVESTMENTS_MAIL_FROM_NAME }}"
+            echo DAILY_CHANGE_TIME="${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}"
+            echo ALPHAVANTAGE_API_KEY="${{ secrets.INVESTMENTS_ALPHAVANTAGE_API_KEY }}"
+            echo FINNHUB_API_KEY="${{ secrets.INVESTMENTS_FINNHUB_API_KEY }}"
+            echo ALPACA_API_KEY="${{ secrets.INVESTMENTS_ALPACA_API_KEY }}"
+            echo ALPACA_API_SECRET="${{ secrets.INVESTMENTS_ALPACA_API_SECRET }}"
+            echo TWELVEDATA_API_SECRET="${{ secrets.INVESTMENTS_TWELVEDATA_API_SECRET }}"
+            echo CHAT_PROVIDER="${{ secrets.INVESTMENTS_CHAT_PROVIDER }}"
+            echo CHAT_MODEL="${{ secrets.INVESTMENTS_CHAT_MODEL }}"
+            echo OPENAI_API_KEY="${{ secrets.INVESTMENTS_OPENAI_API_KEY }}"
+            echo MAIL_HOST="${{ secrets.INVESTMENTS_MAIL_HOST }}"
+            echo MAIL_PORT="${{ secrets.INVESTMENTS_MAIL_PORT }}"
+            echo MAIL_USERNAME="${{ secrets.INVESTMENTS_MAIL_USERNAME }}"
+            echo MAIL_PASSWORD="${{ secrets.INVESTMENTS_MAIL_PASSWORD }}"
+            echo MAIL_ENCRYPTION="${{ secrets.INVESTMENTS_MAIL_ENCRYPTION }}"
+          } > .env
+          chmod 600 .env
+
       - name: Discover packages
         run: |
           set -euo pipefail
-          mv "${RUNNER_TEMP:?}/investments.env" build/app/.env
-          chmod 600 build/app/.env
           mkdir -p \
             build/app/storage/framework/cache/data \
             build/app/storage/framework/sessions \
