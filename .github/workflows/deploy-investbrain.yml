@@ -1,0 +1,212 @@
+# Deploy the latest Investbrain release to Hostinger shared hosting.
+# Manual only: do not add push, pull_request, or schedule triggers.
+# The site and secrets do not exist yet, so a push must not deploy.
+#
+# Secrets are INVESTBRAIN_* and are not the Firefly secrets. Firefly's FTP
+# login and SSH_REMOTE_PATH are the finance document root. Reusing them would
+# unpack this app on top of Firefly. Copy the shared SSH host, user, password,
+# and port into the INVESTBRAIN_SSH_REMOTE_* secrets when both sites are on
+# one Hostinger account. See README.md.
+
+name: Deploy Investbrain
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check secrets and write .env
+        env:
+          INVESTBRAIN_FTP_SERVER: ${{ secrets.INVESTBRAIN_FTP_SERVER }}
+          INVESTBRAIN_FTP_USERNAME: ${{ secrets.INVESTBRAIN_FTP_USERNAME }}
+          INVESTBRAIN_FTP_PASSWORD: ${{ secrets.INVESTBRAIN_FTP_PASSWORD }}
+          INVESTBRAIN_SSH_REMOTE_HOST: ${{ secrets.INVESTBRAIN_SSH_REMOTE_HOST }}
+          INVESTBRAIN_SSH_REMOTE_USER: ${{ secrets.INVESTBRAIN_SSH_REMOTE_USER }}
+          INVESTBRAIN_SSH_REMOTE_PASSWORD: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PASSWORD }}
+          INVESTBRAIN_SSH_REMOTE_PORT: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PORT }}
+          INVESTBRAIN_SSH_REMOTE_PATH: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PATH }}
+          INVESTBRAIN_PHP_BIN: ${{ secrets.INVESTBRAIN_PHP_BIN }}
+          INVESTBRAIN_APP_NAME: ${{ secrets.INVESTBRAIN_APP_NAME }}
+          INVESTBRAIN_APP_ENV: ${{ secrets.INVESTBRAIN_APP_ENV }}
+          INVESTBRAIN_APP_KEY: ${{ secrets.INVESTBRAIN_APP_KEY }}
+          INVESTBRAIN_APP_DEBUG: ${{ secrets.INVESTBRAIN_APP_DEBUG }}
+          INVESTBRAIN_APP_URL: ${{ secrets.INVESTBRAIN_APP_URL }}
+          INVESTBRAIN_ASSET_URL: ${{ secrets.INVESTBRAIN_ASSET_URL }}
+          INVESTBRAIN_APP_TIMEZONE: ${{ secrets.INVESTBRAIN_APP_TIMEZONE }}
+          INVESTBRAIN_APP_LOCALE: ${{ secrets.INVESTBRAIN_APP_LOCALE }}
+          INVESTBRAIN_SELF_HOSTED: ${{ secrets.INVESTBRAIN_SELF_HOSTED }}
+          INVESTBRAIN_REGISTRATION_ENABLED: ${{ secrets.INVESTBRAIN_REGISTRATION_ENABLED }}
+          INVESTBRAIN_AI_CHAT_ENABLED: ${{ secrets.INVESTBRAIN_AI_CHAT_ENABLED }}
+          INVESTBRAIN_LOG_CHANNEL: ${{ secrets.INVESTBRAIN_LOG_CHANNEL }}
+          INVESTBRAIN_LOG_LEVEL: ${{ secrets.INVESTBRAIN_LOG_LEVEL }}
+          INVESTBRAIN_FILESYSTEM_DISK: ${{ secrets.INVESTBRAIN_FILESYSTEM_DISK }}
+          INVESTBRAIN_SESSION_DRIVER: ${{ secrets.INVESTBRAIN_SESSION_DRIVER }}
+          INVESTBRAIN_QUEUE_CONNECTION: ${{ secrets.INVESTBRAIN_QUEUE_CONNECTION }}
+          INVESTBRAIN_CACHE_STORE: ${{ secrets.INVESTBRAIN_CACHE_STORE }}
+          INVESTBRAIN_DB_CONNECTION: ${{ secrets.INVESTBRAIN_DB_CONNECTION }}
+          INVESTBRAIN_DB_HOST: ${{ secrets.INVESTBRAIN_DB_HOST }}
+          INVESTBRAIN_DB_PORT: ${{ secrets.INVESTBRAIN_DB_PORT }}
+          INVESTBRAIN_DB_DATABASE: ${{ secrets.INVESTBRAIN_DB_DATABASE }}
+          INVESTBRAIN_DB_USERNAME: ${{ secrets.INVESTBRAIN_DB_USERNAME }}
+          INVESTBRAIN_DB_PASSWORD: ${{ secrets.INVESTBRAIN_DB_PASSWORD }}
+          INVESTBRAIN_MARKET_DATA_PROVIDER: ${{ secrets.INVESTBRAIN_MARKET_DATA_PROVIDER }}
+          INVESTBRAIN_MARKET_DATA_REFRESH: ${{ secrets.INVESTBRAIN_MARKET_DATA_REFRESH }}
+          INVESTBRAIN_BASE_CURRENCY: ${{ secrets.INVESTBRAIN_BASE_CURRENCY }}
+          INVESTBRAIN_MAIL_MAILER: ${{ secrets.INVESTBRAIN_MAIL_MAILER }}
+          INVESTBRAIN_MAIL_FROM_ADDRESS: ${{ secrets.INVESTBRAIN_MAIL_FROM_ADDRESS }}
+          INVESTBRAIN_MAIL_FROM_NAME: ${{ secrets.INVESTBRAIN_MAIL_FROM_NAME }}
+          INVESTBRAIN_DAILY_CHANGE_TIME: ${{ secrets.INVESTBRAIN_DAILY_CHANGE_TIME }}
+          INVESTBRAIN_ALPHAVANTAGE_API_KEY: ${{ secrets.INVESTBRAIN_ALPHAVANTAGE_API_KEY }}
+          INVESTBRAIN_FINNHUB_API_KEY: ${{ secrets.INVESTBRAIN_FINNHUB_API_KEY }}
+          INVESTBRAIN_ALPACA_API_KEY: ${{ secrets.INVESTBRAIN_ALPACA_API_KEY }}
+          INVESTBRAIN_ALPACA_API_SECRET: ${{ secrets.INVESTBRAIN_ALPACA_API_SECRET }}
+          INVESTBRAIN_TWELVEDATA_API_SECRET: ${{ secrets.INVESTBRAIN_TWELVEDATA_API_SECRET }}
+          INVESTBRAIN_CHAT_PROVIDER: ${{ secrets.INVESTBRAIN_CHAT_PROVIDER }}
+          INVESTBRAIN_CHAT_MODEL: ${{ secrets.INVESTBRAIN_CHAT_MODEL }}
+          INVESTBRAIN_OPENAI_API_KEY: ${{ secrets.INVESTBRAIN_OPENAI_API_KEY }}
+          INVESTBRAIN_MAIL_HOST: ${{ secrets.INVESTBRAIN_MAIL_HOST }}
+          INVESTBRAIN_MAIL_PORT: ${{ secrets.INVESTBRAIN_MAIL_PORT }}
+          INVESTBRAIN_MAIL_USERNAME: ${{ secrets.INVESTBRAIN_MAIL_USERNAME }}
+          INVESTBRAIN_MAIL_PASSWORD: ${{ secrets.INVESTBRAIN_MAIL_PASSWORD }}
+          INVESTBRAIN_MAIL_ENCRYPTION: ${{ secrets.INVESTBRAIN_MAIL_ENCRYPTION }}
+        run: bash deploy/investbrain/fill-env.sh "${RUNNER_TEMP:?}/investbrain.env"
+
+      - name: Download latest release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/investbrainapp/investbrain/releases/latest \
+            | jq -er .tag_name)"
+          if [[ ! "${tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Unexpected Investbrain release tag: ${tag}" >&2
+            exit 1
+          fi
+          mkdir -p build
+          curl -fL --retry 3 --retry-delay 2 -o build/source.zip \
+            "https://github.com/investbrainapp/investbrain/archive/refs/tags/${tag}.zip"
+          {
+            echo "tag=${tag}"
+            echo "archive=Investbrain-${tag}.zip"
+          } >> "${GITHUB_OUTPUT}"
+
+      # v1.3.1 locks Symfony 8.1, which requires PHP >= 8.4.1.
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: bcmath, ctype, curl, dom, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, sodium, tokenizer, xml, zip
+          coverage: none
+          tools: composer
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies and build assets
+        env:
+          COMPOSER_MEMORY_LIMIT: "-1"
+          COMPOSER_NO_INTERACTION: "1"
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          set -euo pipefail
+          rm -rf build/extract build/app
+          unzip -q build/source.zip -d build/extract
+          mapfile -t src_dirs < <(find build/extract -mindepth 1 -maxdepth 1 -type d | sort)
+          if [[ "${#src_dirs[@]}" -ne 1 ]]; then
+            echo "Expected one top-level directory in the release archive, found ${#src_dirs[@]}." >&2
+            exit 1
+          fi
+          mv "${src_dirs[0]}" build/app
+          cd build/app
+          composer install --no-dev --no-scripts --optimize-autoloader --no-interaction --prefer-dist
+          npm ci
+          npm run build
+          rm -rf node_modules tests docker
+          rm -f public/hot
+
+      - name: Discover packages
+        run: |
+          set -euo pipefail
+          mv "${RUNNER_TEMP:?}/investbrain.env" build/app/.env
+          chmod 600 build/app/.env
+          mkdir -p \
+            build/app/storage/framework/cache/data \
+            build/app/storage/framework/sessions \
+            build/app/storage/framework/views \
+            build/app/storage/app/public \
+            build/app/storage/logs \
+            build/app/bootstrap/cache
+          cd build/app
+          php artisan package:discover --ansi
+          php artisan filament:upgrade
+
+      - name: Add root .htaccess and zip
+        env:
+          ARCHIVE: ${{ steps.release.outputs.archive }}
+        run: |
+          set -euo pipefail
+          cp deploy/investbrain/root.htaccess build/app/.htaccess
+          rm -rf release
+          mkdir -p release
+          (
+            cd build/app
+            zip -qr "../../release/${ARCHIVE:?}" .
+          )
+
+      - name: Upload via FTP
+        uses: airvzxf/ftp-deployment-action@latest
+        with:
+          server: ${{ secrets.INVESTBRAIN_FTP_SERVER }}
+          user: ${{ secrets.INVESTBRAIN_FTP_USERNAME }}
+          password: ${{ secrets.INVESTBRAIN_FTP_PASSWORD }}
+          local_dir: "./release"
+          ssl_check_hostname: "false"
+
+      - name: Unzip, migrate, and cache
+        uses: appleboy/ssh-action@master
+        env:
+          INVESTBRAIN_SSH_REMOTE_PATH: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PATH }}
+          INVESTBRAIN_PHP_BIN: ${{ secrets.INVESTBRAIN_PHP_BIN }}
+          ARCHIVE: ${{ steps.release.outputs.archive }}
+        with:
+          host: ${{ secrets.INVESTBRAIN_SSH_REMOTE_HOST }}
+          username: ${{ secrets.INVESTBRAIN_SSH_REMOTE_USER }}
+          password: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PASSWORD }}
+          port: ${{ secrets.INVESTBRAIN_SSH_REMOTE_PORT }}
+          command_timeout: 30m
+          script_stop: true
+          envs: INVESTBRAIN_SSH_REMOTE_PATH,INVESTBRAIN_PHP_BIN,ARCHIVE
+          script: |
+            set -eu
+            cd "$INVESTBRAIN_SSH_REMOTE_PATH"
+            unzip -o "$ARCHIVE"
+            rm -f "$ARCHIVE"
+            chmod 600 .env
+            mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/app/public storage/logs bootstrap/cache
+            chmod -R u+rwX storage bootstrap/cache
+            "$INVESTBRAIN_PHP_BIN" artisan migrate --force
+            "$INVESTBRAIN_PHP_BIN" artisan storage:link --relative --force
+            "$INVESTBRAIN_PHP_BIN" artisan optimize:clear
+            "$INVESTBRAIN_PHP_BIN" artisan config:cache
+            "$INVESTBRAIN_PHP_BIN" artisan route:cache
+            "$INVESTBRAIN_PHP_BIN" artisan event:cache
+            chmod 600 .env bootstrap/cache/config.php
