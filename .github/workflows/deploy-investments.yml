@@ -103,15 +103,15 @@ jobs:
             echo DAILY_CHANGE_TIME="${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}"
             echo REGISTRATION_ENABLED="${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}"
             echo BASE_CURRENCY="${{ secrets.INVESTMENTS_BASE_CURRENCY }}"
-            echo DB_CONNECTION=mysql
-            echo DB_HOST=localhost
-            echo DB_PORT=3306
+            echo DB_CONNECTION="${{ secrets.INVESTMENTS_DB_CONNECTION }}"
+            echo DB_HOST="${{ secrets.INVESTMENTS_DB_HOST }}"
+            echo DB_PORT="${{ secrets.INVESTMENTS_DB_PORT }}"
             echo DB_DATABASE="${{ secrets.INVESTMENTS_DB_DATABASE }}"
             echo DB_USERNAME="${{ secrets.INVESTMENTS_DB_USERNAME }}"
             echo DB_PASSWORD="${{ secrets.INVESTMENTS_DB_PASSWORD }}"
-            echo CACHE_STORE=database
-            echo QUEUE_CONNECTION=database
-            echo SESSION_DRIVER=database
+            echo CACHE_STORE="${{ secrets.INVESTMENTS_CACHE_STORE }}"
+            echo QUEUE_CONNECTION="${{ secrets.INVESTMENTS_QUEUE_CONNECTION }}"
+            echo SESSION_DRIVER="${{ secrets.INVESTMENTS_SESSION_DRIVER }}"
           } > .env
           chmod 600 .env
 
