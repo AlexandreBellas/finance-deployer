@@ -80,6 +80,14 @@ jobs:
           rm -rf node_modules tests docker
           rm -f public/hot
 
+      # Workaround until upstream fixes the GROUP BY in Holding::scopeGetPortfolioMetrics; remove this step then.
+      - name: Patch MySQL sql_mode (drop ONLY_FULL_GROUP_BY)
+        working-directory: build/app
+        run: |
+          set -euo pipefail
+          sed -i "s/'strict' => true,/'strict' => true,\n            'modes' => ['STRICT_TRANS_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE', 'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION'],/" config/database.php
+          grep -q "'modes' =>" config/database.php || { echo "strict-mode patch did not apply"; exit 1; }
+
       - name: Fill .env from secrets
         working-directory: build/app
         run: |
