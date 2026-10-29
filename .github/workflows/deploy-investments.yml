@@ -150,7 +150,7 @@ jobs:
           ARCHIVE: ${{ steps.release.outputs.archive }}
         run: |
           set -euo pipefail
-          cp deploy/root.htaccess build/app/.htaccess
+          cp .htaccess build/app/.htaccess
           rm -rf release
           mkdir -p release
           (
