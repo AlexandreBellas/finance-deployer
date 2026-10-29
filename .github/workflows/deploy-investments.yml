@@ -170,7 +170,7 @@ jobs:
       - name: Unzip, migrate, and cache
         uses: appleboy/ssh-action@master
         env:
-          SSH_REMOTE_PATH: ${{ secrets.SSH_REMOTE_PATH }}
+          INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
           INVESTMENTS_PHP_BIN: ${{ secrets.INVESTMENTS_PHP_BIN }}
           ARCHIVE: ${{ steps.release.outputs.archive }}
         with:
@@ -180,10 +180,10 @@ jobs:
           port: ${{ secrets.SSH_REMOTE_PORT }}
           command_timeout: 30m
           script_stop: true
-          envs: SSH_REMOTE_PATH,INVESTMENTS_PHP_BIN,ARCHIVE
+          envs: INVESTMENTS_SSH_REMOTE_PATH,INVESTMENTS_PHP_BIN,ARCHIVE
           script: |
             set -eu
-            cd "$SSH_REMOTE_PATH"
+            cd "$INVESTMENTS_SSH_REMOTE_PATH"
             unzip -o "$ARCHIVE"
             rm -f "$ARCHIVE"
             chmod 600 .env

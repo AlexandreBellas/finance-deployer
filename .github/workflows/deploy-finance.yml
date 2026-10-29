@@ -71,6 +71,6 @@ jobs:
           password: ${{ secrets.SSH_REMOTE_PASSWORD }}
           port: ${{ secrets.SSH_REMOTE_PORT }}
           script: |
-            cd ${{ secrets.SSH_REMOTE_PATH }}
+            cd ${{ secrets.FINANCE_SSH_REMOTE_PATH }}
             unzip -o ${{ steps.release.outputs.archive }}
             rm ${{ steps.release.outputs.archive }}
