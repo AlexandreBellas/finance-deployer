@@ -4,7 +4,26 @@ GitHub Actions workflows that deploy self-hosted apps to Hostinger shared hostin
 
 ## Firefly III
 
-`.github/workflows/deploy.yml` deploys [Firefly III](https://github.com/firefly-iii/firefly-iii). That workflow is unchanged.
+`.github/workflows/deploy.yml` deploys [Firefly III](https://github.com/firefly-iii/firefly-iii).
+
+App, database, and FTP secrets use a `FIREFLY_` prefix. Recreate each renamed secret under the new name before the next Firefly deploy. The old names are no longer read.
+
+| Old name | New name |
+| --- | --- |
+| `APP_KEY` | `FIREFLY_APP_KEY` |
+| `APP_URL` | `FIREFLY_APP_URL` |
+| `SITE_OWNER` | `FIREFLY_SITE_OWNER` |
+| `DB_CONNECTION` | `FIREFLY_DB_CONNECTION` |
+| `DB_HOST` | `FIREFLY_DB_HOST` |
+| `DB_PORT` | `FIREFLY_DB_PORT` |
+| `DB_DATABASE` | `FIREFLY_DB_DATABASE` |
+| `DB_USERNAME` | `FIREFLY_DB_USERNAME` |
+| `DB_PASSWORD` | `FIREFLY_DB_PASSWORD` |
+| `FTP_SERVER` | `FIREFLY_FTP_SERVER` |
+| `FTP_USERNAME` | `FIREFLY_FTP_USERNAME` |
+| `FTP_PASSWORD` | `FIREFLY_FTP_PASSWORD` |
+
+These SSH secrets stay unchanged: `SSH_REMOTE_HOST`, `SSH_REMOTE_USER`, `SSH_REMOTE_PASSWORD`, `SSH_REMOTE_PORT`, `SSH_REMOTE_PATH`. `GITHUB_TOKEN` is still the automatic Actions token.
 
 ## Investbrain
 
@@ -19,7 +38,7 @@ Investbrain v1.3.1 is Laravel 13. Its lockfile uses Symfony 8.1, which requires 
 ### Why the secrets are separate
 
 1. Every value for this app is an `INVESTBRAIN_` secret.
-2. The Firefly workflow reads `FTP_*`, `SSH_REMOTE_*`, `APP_*`, and `DB_*`.
+2. The Firefly workflow reads `FIREFLY_FTP_*`, `FIREFLY_APP_*`, `FIREFLY_DB_*`, `FIREFLY_SITE_OWNER`, and the unprefixed `SSH_REMOTE_*` secrets.
 3. Those secrets are the finance site. Its FTP login lands in the finance document root, and `SSH_REMOTE_PATH` is that directory.
 4. Reusing them would unpack Investbrain on top of Firefly.
 5. The Hostinger SSH host, user, password, and port are often one account for both sites. Copy those four into `INVESTBRAIN_SSH_REMOTE_HOST`, `INVESTBRAIN_SSH_REMOTE_USER`, `INVESTBRAIN_SSH_REMOTE_PASSWORD`, and `INVESTBRAIN_SSH_REMOTE_PORT`.

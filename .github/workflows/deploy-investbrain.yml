@@ -2,11 +2,11 @@
 # Manual only: do not add push, pull_request, or schedule triggers.
 # The site and secrets do not exist yet, so a push must not deploy.
 #
-# Secrets are INVESTBRAIN_* and are not the Firefly secrets. Firefly's FTP
-# login and SSH_REMOTE_PATH are the finance document root. Reusing them would
-# unpack this app on top of Firefly. Copy the shared SSH host, user, password,
-# and port into the INVESTBRAIN_SSH_REMOTE_* secrets when both sites are on
-# one Hostinger account. See README.md.
+# Secrets are INVESTBRAIN_* and are not the Firefly secrets. Firefly's
+# FIREFLY_FTP_* login and SSH_REMOTE_PATH are the finance document root.
+# Reusing them would unpack this app on top of Firefly. Copy the shared SSH
+# host, user, password, and port into the INVESTBRAIN_SSH_REMOTE_* secrets
+# when both sites are on one Hostinger account. See README.md.
 
 name: Deploy Investbrain
 
