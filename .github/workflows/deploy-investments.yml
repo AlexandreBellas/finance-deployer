@@ -662,9 +662,11 @@ jobs:
               echo "Created Passport encryption keys."
             fi
             chmod 600 "$stage/storage/oauth-private.key" "$stage/storage/oauth-public.key"
-            # In-place mode keeps the live storage directory and deletes the stage.
-            # Link new keys into that directory so they are not removed with the stage.
-            if [ "$use_sibling" != "1" ]; then
+            # New key files exist only in the stage. Sibling rollback restores the
+            # previous storage directory, so link them there before the swap.
+            # Otherwise the only copy moves aside with the failed tree and the
+            # restored site has no key Passport can read.
+            if [ -d "$remote/storage" ] && [ "$stage/storage" != "$remote/storage" ]; then
               if [ ! -e "$remote/storage/oauth-private.key" ]; then
                 ln -- "$stage/storage/oauth-private.key" "$remote/storage/oauth-private.key"
               fi
@@ -831,17 +833,27 @@ jobs:
           base="https://investments.alebatistella.com"
           login_code=""
           dividend_code=""
+          # A repo secret contains the digits 30, so Actions prints 302 as ***2.
+          # Space the digits in the log. Comparisons still use the raw code.
+          show_code() {
+            printf '%s' "$1" | sed 's/./& /g'
+          }
           for attempt in 1 2 3 4 5 6; do
             login_code="$(curl -sS -o /tmp/login.html -w '%{http_code}' --max-time 30 "${base}/login" || true)"
-            dividend_code="$(curl -sS -o /tmp/dividend.body -w '%{http_code}' --max-time 30 "${base}/api/dividend" || true)"
-            echo "attempt=${attempt} source=${SOURCE_SHA} login_http=${login_code} dividend_http=${dividend_code}"
+            # auth:api redirects a browser request to /login (302). The API
+            # returns 401 only when the request expects JSON. Do not follow it.
+            dividend_code="$(curl -sS -o /tmp/dividend.body -w '%{http_code}' --max-time 30 \
+              -H 'Accept: application/json' \
+              -H 'X-Requested-With: XMLHttpRequest' \
+              "${base}/api/dividend" || true)"
+            echo "attempt=${attempt} source=${SOURCE_SHA} login_http=$(show_code "$login_code") dividend_http=$(show_code "$dividend_code")"
             if [[ "${login_code}" == "200" && "${dividend_code}" == "401" ]]; then
               break
             fi
             sleep 5
           done
           if [[ "${login_code}" != "200" ]]; then
-            echo "Login page returned HTTP ${login_code}, expected 200." >&2
+            echo "Login page returned HTTP $(show_code "$login_code"), expected 2 0 0." >&2
             exit 1
           fi
           if ! grep -qiE 'type="password"|name="password"' /tmp/login.html; then
@@ -849,7 +861,7 @@ jobs:
             exit 1
           fi
           if [[ "${dividend_code}" != "401" ]]; then
-            echo "GET /api/dividend returned HTTP ${dividend_code}, expected 401." >&2
+            echo "GET /api/dividend returned HTTP $(show_code "$dividend_code"), expected 4 0 1." >&2
             exit 1
           fi
           echo "Public checks passed for ${SOURCE_SHA}."
