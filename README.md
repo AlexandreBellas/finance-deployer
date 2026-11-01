@@ -3,4 +3,4 @@
 GitHub Actions workflows that deploy self-hosted finance apps to Hostinger shared hosting.
 
 - `.github/workflows/deploy-finance.yml` deploys Firefly III.
-- `.github/workflows/deploy-investments.yml` deploys the investments tracker. Start it manually.
+- `.github/workflows/deploy-investments.yml` deploys [AlexandreBellas/investbrain](https://github.com/AlexandreBellas/investbrain). Start it manually. By default it builds that fork's `main` HEAD, resolved to a commit SHA. Pass the `ref` input to build another branch, tag, or SHA from the same fork. It does not use upstream `investbrainapp/investbrain` releases.
