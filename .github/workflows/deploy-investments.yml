@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
 
       - name: Resolve fork commit and download source
         id: release
@@ -97,7 +97,7 @@ jobs:
 
       # The fork's composer.json requires PHP ^8.4.
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@2.40.0
         with:
           php-version: "8.4"
           extensions: bcmath, ctype, curl, dom, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, sodium, tokenizer, xml, zip
@@ -105,7 +105,7 @@ jobs:
           tools: composer
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: "22"
 
@@ -139,39 +139,22 @@ jobs:
           sed -i "s/'strict' => true,/'strict' => true,\n            'modes' => ['STRICT_TRANS_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE', 'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION'],/" config/database.php
           grep -q "'modes' =>" config/database.php || { echo "strict-mode patch did not apply"; exit 1; }
 
-      - name: Fill .env from secrets
+      # Artisan has to boot during the build. This key is generated here and the file
+      # is deleted before the archive is created. Server secrets are written over SSH.
+      - name: Prepare a build-only .env
         working-directory: build/app
         run: |
           set -euo pipefail
-          {
-            echo APP_KEY="${{ secrets.INVESTMENTS_APP_KEY }}"
-            echo APP_URL="${{ secrets.INVESTMENTS_APP_URL }}"
-            echo ASSET_URL="${{ secrets.INVESTMENTS_ASSET_URL }}"
-            echo MARKET_DATA_PROVIDER="${{ secrets.INVESTMENTS_MARKET_DATA_PROVIDER }}"
-            echo ALPHAVANTAGE_API_KEY="${{ secrets.INVESTMENTS_ALPHAVANTAGE_API_KEY }}"
-            echo FINNHUB_API_KEY="${{ secrets.INVESTMENTS_FINNHUB_API_KEY }}"
-            echo ALPACA_API_KEY="${{ secrets.INVESTMENTS_ALPACA_API_KEY }}"
-            echo ALPACA_API_SECRET="${{ secrets.INVESTMENTS_ALPACA_API_SECRET }}"
-            echo TWELVEDATA_API_SECRET="${{ secrets.INVESTMENTS_TWELVEDATA_API_SECRET }}"
-            echo MARKET_DATA_REFRESH="${{ secrets.INVESTMENTS_MARKET_DATA_REFRESH }}"
-            echo APP_TIMEZONE="${{ secrets.INVESTMENTS_APP_TIMEZONE }}"
-            echo AI_CHAT_ENABLED="${{ secrets.INVESTMENTS_AI_CHAT_ENABLED }}"
-            echo CHAT_PROVIDER="${{ secrets.INVESTMENTS_CHAT_PROVIDER }}"
-            echo CHAT_MODEL="${{ secrets.INVESTMENTS_CHAT_MODEL }}"
-            echo OPENAI_API_KEY="${{ secrets.INVESTMENTS_OPENAI_API_KEY }}"
-            echo DAILY_CHANGE_TIME="${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}"
-            echo REGISTRATION_ENABLED="${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}"
-            echo BASE_CURRENCY="${{ secrets.INVESTMENTS_BASE_CURRENCY }}"
-            echo DB_CONNECTION="${{ secrets.INVESTMENTS_DB_CONNECTION }}"
-            echo DB_HOST="${{ secrets.INVESTMENTS_DB_HOST }}"
-            echo DB_PORT="${{ secrets.INVESTMENTS_DB_PORT }}"
-            echo DB_DATABASE="${{ secrets.INVESTMENTS_DB_DATABASE }}"
-            echo DB_USERNAME="${{ secrets.INVESTMENTS_DB_USERNAME }}"
-            echo DB_PASSWORD="${{ secrets.INVESTMENTS_DB_PASSWORD }}"
-            echo CACHE_STORE="${{ secrets.INVESTMENTS_CACHE_STORE }}"
-            echo QUEUE_CONNECTION="${{ secrets.INVESTMENTS_QUEUE_CONNECTION }}"
-            echo SESSION_DRIVER="${{ secrets.INVESTMENTS_SESSION_DRIVER }}"
-          } > .env
+          umask 077
+          app_key="base64:$(openssl rand -base64 32)"
+          cat > .env << EOF
+          APP_NAME=Investbrain
+          APP_ENV=local
+          APP_KEY=${app_key}
+          APP_DEBUG=false
+          APP_URL=http://localhost
+          DB_CONNECTION=sqlite
+          EOF
           chmod 600 .env
 
       - name: Discover packages
@@ -195,31 +178,67 @@ jobs:
           set -euo pipefail
           cp .htaccess build/app/.htaccess
           cp deploy/mysql/*.php build/app/database/migrations/
+          rm -f build/app/.env build/app/bootstrap/cache/config.php
           rm -rf release
           mkdir -p release
           (
             cd build/app
-            zip -qr "../../release/${ARCHIVE:?}" .
+            zip -qr "../../release/${ARCHIVE:?}" . -x '.env'
           )
+          if unzip -Z1 "release/${ARCHIVE}" | grep -Eq '(^|/)\.env$'; then
+            echo "Archive contains .env." >&2
+            exit 1
+          fi
 
-      - name: Upload via FTP
-        uses: airvzxf/ftp-deployment-action@latest
+      - name: Upload archive over SSH
+        uses: appleboy/scp-action@v1.0.0
         with:
-          server: ${{ secrets.INVESTMENTS_FTP_SERVER }}
-          user: ${{ secrets.INVESTMENTS_FTP_USERNAME }}
-          password: ${{ secrets.INVESTMENTS_FTP_PASSWORD }}
-          local_dir: "./release"
-          ssl_check_hostname: "false"
+          host: ${{ secrets.SSH_REMOTE_HOST }}
+          username: ${{ secrets.SSH_REMOTE_USER }}
+          password: ${{ secrets.SSH_REMOTE_PASSWORD }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
+          source: release/Investments-*.zip
+          target: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
+          strip_components: 1
+          overwrite: true
+          command_timeout: 15m
 
       # unzip -o leaves files the new release removed. Laravel then loads every
       # config/*.php, so a leftover config/sanctum.php 500s once Sanctum is gone.
       - name: Swap release, migrate, and cache
         id: swap
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.2.5
         env:
           INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
           INVESTMENTS_PHP_BIN: ${{ secrets.INVESTMENTS_PHP_BIN }}
           ARCHIVE: ${{ steps.release.outputs.archive }}
+          INVESTMENTS_APP_KEY: ${{ secrets.INVESTMENTS_APP_KEY }}
+          INVESTMENTS_APP_URL: ${{ secrets.INVESTMENTS_APP_URL }}
+          INVESTMENTS_ASSET_URL: ${{ secrets.INVESTMENTS_ASSET_URL }}
+          INVESTMENTS_MARKET_DATA_PROVIDER: ${{ secrets.INVESTMENTS_MARKET_DATA_PROVIDER }}
+          INVESTMENTS_ALPHAVANTAGE_API_KEY: ${{ secrets.INVESTMENTS_ALPHAVANTAGE_API_KEY }}
+          INVESTMENTS_FINNHUB_API_KEY: ${{ secrets.INVESTMENTS_FINNHUB_API_KEY }}
+          INVESTMENTS_ALPACA_API_KEY: ${{ secrets.INVESTMENTS_ALPACA_API_KEY }}
+          INVESTMENTS_ALPACA_API_SECRET: ${{ secrets.INVESTMENTS_ALPACA_API_SECRET }}
+          INVESTMENTS_TWELVEDATA_API_SECRET: ${{ secrets.INVESTMENTS_TWELVEDATA_API_SECRET }}
+          INVESTMENTS_MARKET_DATA_REFRESH: ${{ secrets.INVESTMENTS_MARKET_DATA_REFRESH }}
+          INVESTMENTS_APP_TIMEZONE: ${{ secrets.INVESTMENTS_APP_TIMEZONE }}
+          INVESTMENTS_AI_CHAT_ENABLED: ${{ secrets.INVESTMENTS_AI_CHAT_ENABLED }}
+          INVESTMENTS_CHAT_PROVIDER: ${{ secrets.INVESTMENTS_CHAT_PROVIDER }}
+          INVESTMENTS_CHAT_MODEL: ${{ secrets.INVESTMENTS_CHAT_MODEL }}
+          INVESTMENTS_OPENAI_API_KEY: ${{ secrets.INVESTMENTS_OPENAI_API_KEY }}
+          INVESTMENTS_DAILY_CHANGE_TIME: ${{ secrets.INVESTMENTS_DAILY_CHANGE_TIME }}
+          INVESTMENTS_REGISTRATION_ENABLED: ${{ secrets.INVESTMENTS_REGISTRATION_ENABLED }}
+          INVESTMENTS_BASE_CURRENCY: ${{ secrets.INVESTMENTS_BASE_CURRENCY }}
+          INVESTMENTS_DB_CONNECTION: ${{ secrets.INVESTMENTS_DB_CONNECTION }}
+          INVESTMENTS_DB_HOST: ${{ secrets.INVESTMENTS_DB_HOST }}
+          INVESTMENTS_DB_PORT: ${{ secrets.INVESTMENTS_DB_PORT }}
+          INVESTMENTS_DB_DATABASE: ${{ secrets.INVESTMENTS_DB_DATABASE }}
+          INVESTMENTS_DB_USERNAME: ${{ secrets.INVESTMENTS_DB_USERNAME }}
+          INVESTMENTS_DB_PASSWORD: ${{ secrets.INVESTMENTS_DB_PASSWORD }}
+          INVESTMENTS_CACHE_STORE: ${{ secrets.INVESTMENTS_CACHE_STORE }}
+          INVESTMENTS_QUEUE_CONNECTION: ${{ secrets.INVESTMENTS_QUEUE_CONNECTION }}
+          INVESTMENTS_SESSION_DRIVER: ${{ secrets.INVESTMENTS_SESSION_DRIVER }}
         with:
           host: ${{ secrets.SSH_REMOTE_HOST }}
           username: ${{ secrets.SSH_REMOTE_USER }}
@@ -227,7 +246,7 @@ jobs:
           port: ${{ secrets.SSH_REMOTE_PORT }}
           command_timeout: 30m
           script_stop: true
-          envs: INVESTMENTS_SSH_REMOTE_PATH,INVESTMENTS_PHP_BIN,ARCHIVE
+          envs: INVESTMENTS_SSH_REMOTE_PATH,INVESTMENTS_PHP_BIN,ARCHIVE,INVESTMENTS_APP_KEY,INVESTMENTS_APP_URL,INVESTMENTS_ASSET_URL,INVESTMENTS_MARKET_DATA_PROVIDER,INVESTMENTS_ALPHAVANTAGE_API_KEY,INVESTMENTS_FINNHUB_API_KEY,INVESTMENTS_ALPACA_API_KEY,INVESTMENTS_ALPACA_API_SECRET,INVESTMENTS_TWELVEDATA_API_SECRET,INVESTMENTS_MARKET_DATA_REFRESH,INVESTMENTS_APP_TIMEZONE,INVESTMENTS_AI_CHAT_ENABLED,INVESTMENTS_CHAT_PROVIDER,INVESTMENTS_CHAT_MODEL,INVESTMENTS_OPENAI_API_KEY,INVESTMENTS_DAILY_CHANGE_TIME,INVESTMENTS_REGISTRATION_ENABLED,INVESTMENTS_BASE_CURRENCY,INVESTMENTS_DB_CONNECTION,INVESTMENTS_DB_HOST,INVESTMENTS_DB_PORT,INVESTMENTS_DB_DATABASE,INVESTMENTS_DB_USERNAME,INVESTMENTS_DB_PASSWORD,INVESTMENTS_CACHE_STORE,INVESTMENTS_QUEUE_CONNECTION,INVESTMENTS_SESSION_DRIVER
           script: |
             set -eu
 
@@ -239,6 +258,7 @@ jobs:
             stage=
             prev=
             status=0
+            secrets_env=
 
             reject() {
               echo "$1" >&2
@@ -379,6 +399,51 @@ jobs:
               rm -rf -- "$prev"
             }
 
+            # A failed release can leave .investbrain-failed beside the docroot.
+            # Remove it only when its .env is the live one and every unique storage
+            # file is a log, cache, session, view, or passport key created here.
+            retire_failed_tree() {
+              dir=$1
+              if [ ! -e "$dir" ]; then
+                return 0
+              fi
+              case $dir in
+                */.investbrain-failed|*/.investbrain-failed-*) ;;
+                *) echo "Refusing to delete an unexpected path." >&2; return 1 ;;
+              esac
+              if [ -f "$dir/.env" ]; then
+                if [ ! -f "$remote/.env" ] || [ "$(stat -c '%i' "$dir/.env")" != "$(stat -c '%i' "$remote/.env")" ]; then
+                  echo "Leaving ${dir##*/} because its .env is not the live .env." >&2
+                  return 0
+                fi
+                rm -f -- "$dir/.env"
+              fi
+              if [ -e "$dir/storage" ]; then
+                if [ ! -d "$remote/storage" ]; then
+                  echo "Leaving ${dir##*/} because the live storage directory is missing." >&2
+                  return 0
+                fi
+                if find "$dir/storage" -type f -links 1 \
+                    ! -path '*/storage/logs/*' \
+                    ! -path '*/storage/framework/cache/*' \
+                    ! -path '*/storage/framework/sessions/*' \
+                    ! -path '*/storage/framework/views/*' \
+                    ! -name 'oauth-private.key' \
+                    ! -name 'oauth-public.key' \
+                    -print -quit | grep -q .; then
+                  echo "Leaving ${dir##*/} because storage has a unique file that is not a log, cache, session, or passport key." >&2
+                  return 0
+                fi
+                rm -rf -- "$dir/storage"
+              fi
+              if [ -e "$dir/.env" ] || [ -e "$dir/storage" ]; then
+                echo "Leaving ${dir##*/} in place." >&2
+                return 0
+              fi
+              rm -rf -- "$dir"
+              echo "Removed ${dir##*/}."
+            }
+
             move_dest=
             move_unpreserved() {
               for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
@@ -424,6 +489,9 @@ jobs:
             cleanup() {
               status=$?
               trap - EXIT
+              if [ -n "$secrets_env" ] && [ -f "$secrets_env" ]; then
+                rm -f -- "$secrets_env"
+              fi
               if [ "$status" -ne 0 ] && [ "$swapped" != "1" ]; then
                 if [ "$phase" = "moving-old" ] || [ "$phase" = "moving-new" ]; then
                   restore_inplace || echo "CRITICAL: could not restore the previous tree." >&2
@@ -454,6 +522,11 @@ jobs:
               rm -rf -- "$stage"
             fi
             discard_previous
+            for failed_dir in "$parent"/.investbrain-failed "$parent"/.investbrain-failed-*; do
+              if [ -e "$failed_dir" ]; then
+                retire_failed_tree "$failed_dir"
+              fi
+            done
 
             echo "Deploying archive $archive"
             mkdir -m 700 "$stage"
@@ -495,16 +568,63 @@ jobs:
               cp -a "$remote/public/.user.ini" "$stage/public/.user.ini"
             fi
 
+            # The archive has no .env. Write one from secrets only when the server
+            # does not already have one; otherwise hardlink the live file so the
+            # only copy is never replaced or deleted.
+            old_umask=$(umask)
+            umask 077
+            secrets_env=$(mktemp)
+            chmod 600 "$secrets_env"
+            write_secret() {
+              # Command substitution would strip a newline, so compare against the
+              # value with newlines removed instead of matching a stored newline.
+              flattened=$(printf '%s' "$2" | tr -d '\n')
+              if [ "$flattened" != "$2" ]; then
+                reject "Refusing to write an environment value that contains a newline."
+              fi
+              printf '%s=%s\n' "$1" "$2" >> "$secrets_env"
+            }
+            write_secret APP_KEY "$INVESTMENTS_APP_KEY"
+            write_secret APP_URL "$INVESTMENTS_APP_URL"
+            write_secret ASSET_URL "$INVESTMENTS_ASSET_URL"
+            write_secret MARKET_DATA_PROVIDER "$INVESTMENTS_MARKET_DATA_PROVIDER"
+            write_secret ALPHAVANTAGE_API_KEY "$INVESTMENTS_ALPHAVANTAGE_API_KEY"
+            write_secret FINNHUB_API_KEY "$INVESTMENTS_FINNHUB_API_KEY"
+            write_secret ALPACA_API_KEY "$INVESTMENTS_ALPACA_API_KEY"
+            write_secret ALPACA_API_SECRET "$INVESTMENTS_ALPACA_API_SECRET"
+            write_secret TWELVEDATA_API_SECRET "$INVESTMENTS_TWELVEDATA_API_SECRET"
+            write_secret MARKET_DATA_REFRESH "$INVESTMENTS_MARKET_DATA_REFRESH"
+            write_secret APP_TIMEZONE "$INVESTMENTS_APP_TIMEZONE"
+            write_secret AI_CHAT_ENABLED "$INVESTMENTS_AI_CHAT_ENABLED"
+            write_secret CHAT_PROVIDER "$INVESTMENTS_CHAT_PROVIDER"
+            write_secret CHAT_MODEL "$INVESTMENTS_CHAT_MODEL"
+            write_secret OPENAI_API_KEY "$INVESTMENTS_OPENAI_API_KEY"
+            write_secret DAILY_CHANGE_TIME "$INVESTMENTS_DAILY_CHANGE_TIME"
+            write_secret REGISTRATION_ENABLED "$INVESTMENTS_REGISTRATION_ENABLED"
+            write_secret BASE_CURRENCY "$INVESTMENTS_BASE_CURRENCY"
+            write_secret DB_CONNECTION "$INVESTMENTS_DB_CONNECTION"
+            write_secret DB_HOST "$INVESTMENTS_DB_HOST"
+            write_secret DB_PORT "$INVESTMENTS_DB_PORT"
+            write_secret DB_DATABASE "$INVESTMENTS_DB_DATABASE"
+            write_secret DB_USERNAME "$INVESTMENTS_DB_USERNAME"
+            write_secret DB_PASSWORD "$INVESTMENTS_DB_PASSWORD"
+            write_secret CACHE_STORE "$INVESTMENTS_CACHE_STORE"
+            write_secret QUEUE_CONNECTION "$INVESTMENTS_QUEUE_CONNECTION"
+            write_secret SESSION_DRIVER "$INVESTMENTS_SESSION_DRIVER"
+            rm -f -- "$stage/.env"
             if [ -f "$remote/.env" ]; then
-              rm -f -- "$stage/.env"
+              rm -f -- "$secrets_env"
+              secrets_env=
               cp -a -l "$remote/.env" "$stage/.env"
               echo "Preserved server .env."
               rm -f -- "$remote/$archive"
-            elif [ ! -f "$stage/.env" ]; then
-              reject "No .env on the server or in the archive."
             else
-              echo "No server .env found; keeping the .env from the archive."
+              mv -- "$secrets_env" "$stage/.env"
+              secrets_env=
+              chmod 600 "$stage/.env"
+              echo "Wrote .env from secrets."
             fi
+            umask "$old_umask"
 
             if [ -d "$remote/storage" ]; then
               if [ "$stage/storage" = "$remote/storage" ]; then
@@ -529,6 +649,30 @@ jobs:
             chmod 600 "$stage/.env"
             chmod -R u+rwX "$stage/storage" "$stage/bootstrap/cache"
 
+            # auth:api builds Passport's resource server before it looks for a
+            # token. With no public key that throws LogicException and the API
+            # returns 500 instead of 401. Create the pair only when both files
+            # are absent; passport:keys without --force exits 1 if either exists.
+            if [ -f "$stage/storage/oauth-private.key" ] && [ -f "$stage/storage/oauth-public.key" ]; then
+              echo "Passport encryption keys already present."
+            elif [ -f "$stage/storage/oauth-private.key" ] || [ -f "$stage/storage/oauth-public.key" ]; then
+              reject "Passport key pair is incomplete. Refusing to overwrite an existing key."
+            else
+              ( cd "$stage" && "$php" artisan passport:keys --no-interaction )
+              echo "Created Passport encryption keys."
+            fi
+            chmod 600 "$stage/storage/oauth-private.key" "$stage/storage/oauth-public.key"
+            # In-place mode keeps the live storage directory and deletes the stage.
+            # Link new keys into that directory so they are not removed with the stage.
+            if [ "$use_sibling" != "1" ]; then
+              if [ ! -e "$remote/storage/oauth-private.key" ]; then
+                ln -- "$stage/storage/oauth-private.key" "$remote/storage/oauth-private.key"
+              fi
+              if [ ! -e "$remote/storage/oauth-public.key" ]; then
+                ln -- "$stage/storage/oauth-public.key" "$remote/storage/oauth-public.key"
+              fi
+            fi
+
             # The stage directory stays 0700 until the tree is complete. LiteSpeed
             # does not run as the account user, so the directory that becomes
             # public_html must be 755. A docroot left at 0700 by the previous
@@ -542,13 +686,29 @@ jobs:
               *) doc_mode=755 ;;
             esac
 
+            ensure_docroot_mode() {
+              chmod 755 "$remote" || return 1
+              mode=$(stat -c '%a' "$remote")
+              case $mode in
+                755|0755) ;;
+                *) echo "Document root mode is $mode, expected 755." >&2; return 1 ;;
+              esac
+            }
+
             rollback_swapped_tree() {
               if [ "$use_sibling" = "1" ]; then
                 cd "$parent" || return 1
                 bad=$parent/.investbrain-failed
                 if [ -e "$bad" ]; then
-                  echo "CRITICAL: failed-release directory already exists." >&2
-                  return 1
+                  aside=$parent/.investbrain-failed-kept
+                  if [ -e "$aside" ]; then
+                    aside=$parent/.investbrain-failed-$(date +%Y%m%d%H%M%S)
+                  fi
+                  if [ -e "$aside" ]; then
+                    echo "CRITICAL: failed-release directory already exists." >&2
+                    return 1
+                  fi
+                  mv -- "$bad" "$aside" || return 1
                 fi
                 if [ -d "$remote" ]; then
                   mv -- "$remote" "$bad" || return 1
@@ -564,6 +724,7 @@ jobs:
                   mv -- "$bad" "$remote" || echo "CRITICAL: live directory was not restored." >&2
                   return 1
                 fi
+                ensure_docroot_mode || return 1
                 if [ -d "$bad" ] && [ -f "$remote/.env" ] && [ -d "$remote/storage" ] && [ -f "$bad/.env" ] && [ "$(stat -c '%i' "$bad/.env")" = "$(stat -c '%i' "$remote/.env")" ]; then
                   if find "$bad/storage" -type f -links 1 -print -quit | grep -q .; then
                     echo "Leaving the failed tree in place because storage is not fully linked." >&2
@@ -577,6 +738,7 @@ jobs:
               else
                 phase=moving-new
                 restore_inplace
+                ensure_docroot_mode || return 1
               fi
             }
 
@@ -694,7 +856,7 @@ jobs:
 
       - name: Remove previous release
         if: ${{ success() }}
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.2.5
         env:
           INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
         with:
@@ -763,7 +925,7 @@ jobs:
 
       - name: Roll back previous release
         if: ${{ failure() && steps.swap.outcome == 'success' && steps.verify.outcome == 'failure' }}
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.2.5
         env:
           INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
         with:
@@ -789,19 +951,73 @@ jobs:
               exit 1
             fi
             parent=$(dirname "$remote")
+
+            # The new tree is still the docroot. Show why the HTTP check failed
+            # before moving it aside. Redact the account path and secret-shaped values.
+            print_laravel_log() {
+              logdir=$remote/storage/logs
+              if [ ! -d "$logdir" ]; then
+                echo "No Laravel log directory." >&2
+                return 0
+              fi
+              log=$(find "$logdir" -maxdepth 1 -type f -name 'laravel*.log' -printf '%T@\t%p\n' 2>/dev/null | sort -n | tail -1 | cut -f2-)
+              if [ -z "$log" ]; then
+                echo "No laravel log file." >&2
+                return 0
+              fi
+              echo "Laravel log tail (${log##*/}):"
+              # mawk's sub() mis-handles replacements, so redact with the shell and sed.
+              tail -n 80 "$log" | while IFS= read -r line || [ -n "$line" ]; do
+                while [ "${line#*"$remote"}" != "$line" ]; do
+                  line="${line%%"$remote"*}[docroot]${line#*"$remote"}"
+                done
+                case $line in
+                  *'PRIVATE KEY'*|*'BEGIN OPENSSH'*|*'BEGIN RSA'*)
+                    printf '%s\n' '[redacted key material]'
+                    continue
+                    ;;
+                esac
+                line=$(printf '%s\n' "$line" | sed -E 's/[Bb]earer[[:space:]]+[^[:space:]]+/Bearer <redacted>/')
+                line=$(printf '%s\n' "$line" | sed -E 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii]_[Kk][Ee][Yy]|[Aa][Pp][Pp]_[Kk][Ee][Yy]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn])([^[:space:]]{0,3}[:=][[:space:]]*).*/\1\2<redacted>/')
+                line=$(printf '%s\n' "$line" | sed -E 's/base64:[A-Za-z0-9+/=_-]+/base64:<redacted>/')
+                line=$(printf '%s\n' "$line" | sed -E 's#mysql://[^[:space:]]+#mysql://<redacted>#')
+                printf '%s\n' "$line"
+              done
+            }
+            print_laravel_log || echo "Could not read the Laravel log." >&2
+
+            ensure_docroot_mode() {
+              chmod 755 "$remote" || return 1
+              mode=$(stat -c '%a' "$remote")
+              case $mode in
+                755|0755) echo "Document root mode is $mode." ;;
+                *) echo "Document root mode is $mode, expected 755." >&2; return 1 ;;
+              esac
+            }
+
             if [ -d "$parent/.investbrain-previous" ] && [ -f "$parent/.investbrain-previous/artisan" ]; then
               prev=$parent/.investbrain-previous
               bad=$parent/.investbrain-failed
               if [ -e "$bad" ]; then
-                echo "CRITICAL: failed-release directory already exists." >&2
-                exit 1
+                aside=$parent/.investbrain-failed-kept
+                if [ -e "$aside" ]; then
+                  aside=$parent/.investbrain-failed-$(date +%Y%m%d%H%M%S)
+                fi
+                if [ -e "$aside" ]; then
+                  echo "CRITICAL: failed-release directory already exists." >&2
+                  exit 1
+                fi
+                mv -- "$bad" "$aside"
+                echo "Moved the previous failed tree aside."
               fi
               cd "$parent"
               mv -- "$remote" "$bad"
               if ! mv -- "$prev" "$remote"; then
                 mv -- "$bad" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                ensure_docroot_mode || true
                 exit 1
               fi
+              ensure_docroot_mode
               if [ -f "$bad/.env" ] && [ -f "$remote/.env" ] && [ "$(stat -c '%i' "$bad/.env")" = "$(stat -c '%i' "$remote/.env")" ] && [ -d "$bad/storage" ] && [ -d "$remote/storage" ]; then
                 if find "$bad/storage" -type f -links 1 -print -quit | grep -q .; then
                   echo "Rolled back. Leaving the failed tree because storage is not fully linked." >&2
@@ -844,8 +1060,10 @@ jobs:
               if [ ! -e "$prev/.env" ] && [ ! -e "$prev/storage" ]; then
                 rm -rf -- "$prev"
               fi
+              ensure_docroot_mode
               echo "Rolled back to the previous tree."
               exit 0
             fi
+            ensure_docroot_mode || true
             echo "No previous tree to restore." >&2
             exit 1
