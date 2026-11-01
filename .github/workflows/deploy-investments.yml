@@ -211,7 +211,9 @@ jobs:
           local_dir: "./release"
           ssl_check_hostname: "false"
 
-      - name: Unzip, migrate, and cache
+      # unzip -o leaves files the new release removed. Laravel then loads every
+      # config/*.php, so a leftover config/sanctum.php 500s once Sanctum is gone.
+      - name: Swap release, migrate, and cache
         uses: appleboy/ssh-action@master
         env:
           INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
@@ -227,20 +229,371 @@ jobs:
           envs: INVESTMENTS_SSH_REMOTE_PATH,INVESTMENTS_PHP_BIN,ARCHIVE
           script: |
             set -eu
-            cd "$INVESTMENTS_SSH_REMOTE_PATH"
-            echo "Deploying archive ${ARCHIVE}"
-            unzip -o "$ARCHIVE"
-            rm -f "$ARCHIVE"
+
+            remote=$INVESTMENTS_SSH_REMOTE_PATH
+            php=$INVESTMENTS_PHP_BIN
+            archive=$ARCHIVE
+            swapped=0
+            phase=init
+            stage=
+            prev=
+            status=0
+
+            reject() {
+              echo "$1" >&2
+              exit 1
+            }
+
+            case $remote in
+              /[A-Za-z0-9._/-]*) ;;
+              *) reject "Remote path is not an absolute path with safe characters." ;;
+            esac
+            case $remote in
+              */) reject "Remote path must not have a trailing slash." ;;
+              *..*) reject "Remote path must not contain .." ;;
+            esac
+            case $php in
+              /[A-Za-z0-9._+/-]*) ;;
+              *) reject "PHP binary is not an absolute path with safe characters." ;;
+            esac
+            case $php in
+              *..*) reject "PHP binary path must not contain .." ;;
+            esac
+            case $archive in
+              Investments-*.zip) ;;
+              *) reject "Unexpected archive name." ;;
+            esac
+            sha=${archive#Investments-}
+            sha=${sha%.zip}
+            case $sha in
+              *[!0-9a-f]*) reject "Unexpected archive name." ;;
+            esac
+            if [ "${#sha}" -ne 40 ]; then
+              reject "Unexpected archive name."
+            fi
+            if [ -L "$remote" ]; then
+              reject "Remote path is a symlink."
+            fi
+
+            parent=$(dirname "$remote")
+            if [ "$parent" = "/" ] || [ "$parent" = "$remote" ]; then
+              reject "Refusing to stage a release next to the filesystem root."
+            fi
+
+            # A sibling swap renames the live directory. If that was interrupted
+            # after the rename, put it back before choosing a mode.
+            if [ ! -e "$remote" ] && [ -f "$parent/.investbrain-previous/.env" ] && [ -d "$parent/.investbrain-previous/storage" ] && [ -f "$parent/.investbrain-previous/artisan" ]; then
+              echo "Restoring the previous tree into the missing live path."
+              mv -- "$parent/.investbrain-previous" "$remote"
+            fi
+            if [ ! -d "$remote" ]; then
+              reject "Remote path is not a real directory."
+            fi
+
+            use_sibling=0
+            if [ -w "$parent" ] && [ -x "$parent" ]; then
+              if [ "$(stat -c '%d' "$remote")" = "$(stat -c '%d' "$parent")" ]; then
+                use_sibling=1
+              fi
+            fi
+            if [ "$use_sibling" = "1" ]; then
+              stage=$parent/.investbrain-stage
+              prev=$parent/.investbrain-previous
+            else
+              stage=$remote/.investbrain-stage
+              prev=$remote/.investbrain-previous
+            fi
+            if [ "$stage" = "$remote" ] || [ "$prev" = "$remote" ]; then
+              reject "Stage path collided with the live directory."
+            fi
+            if [ -d "$remote" ] && [ -d "$prev" ] && [ ! -e "$remote/artisan" ] && [ -f "$prev/artisan" ]; then
+              echo "Restoring code moved aside by an interrupted release."
+              case $prev in
+                */.investbrain-previous) ;;
+                *) reject "Refusing to restore from an unexpected path." ;;
+              esac
+              for entry in "$prev"/* "$prev"/.[!.]* "$prev"/..?*; do
+                if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                  continue
+                fi
+                name=${entry##*/}
+                case $name in
+                  .|..|.env|storage|.release-names) continue ;;
+                esac
+                mv -- "$entry" "$remote/"
+              done
+              if [ ! -e "$prev/.env" ] && [ ! -e "$prev/storage" ]; then
+                rm -rf -- "$prev"
+              fi
+            fi
+            if [ ! -d "$remote" ]; then
+              reject "Remote path is not a real directory."
+            fi
+            if [ ! -f "$remote/$archive" ]; then
+              reject "Archive was not uploaded into the remote directory."
+            fi
+
+            is_preserved_name() {
+              case $1 in
+                .|..|.env|storage|.user.ini|php.ini|.php-version|cgi-bin|.investbrain-stage|.investbrain-previous|.release-names)
+                  return 0
+                  ;;
+              esac
+              return 1
+            }
+
+            assert_work_dir() {
+              case $1 in
+                */.investbrain-stage|*/.investbrain-previous) ;;
+                *) reject "Refusing to delete an unexpected path." ;;
+              esac
+            }
+
+            discard_previous() {
+              if [ ! -e "$prev" ]; then
+                return 0
+              fi
+              assert_work_dir "$prev"
+              if [ -f "$prev/.env" ]; then
+                if [ ! -f "$remote/.env" ]; then
+                  reject "Previous tree has .env but the live tree does not."
+                fi
+                if [ "$(stat -c '%i' "$prev/.env")" != "$(stat -c '%i' "$remote/.env")" ]; then
+                  reject "Previous .env is not the live server .env."
+                fi
+                rm -f -- "$prev/.env"
+              fi
+              if [ -e "$prev/storage" ]; then
+                if [ ! -d "$remote/storage" ]; then
+                  reject "Previous tree has storage but the live tree does not."
+                fi
+                if find "$prev/storage" -type f -links 1 -print -quit | grep -q .; then
+                  reject "Previous storage has a file that is not linked into the live tree."
+                fi
+                rm -rf -- "$prev/storage"
+              fi
+              if [ -e "$prev/.env" ] || [ -e "$prev/storage" ]; then
+                reject "Previous tree still holds .env or storage."
+              fi
+              rm -rf -- "$prev"
+            }
+
+            move_dest=
+            move_unpreserved() {
+              for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                  continue
+                fi
+                name=${entry##*/}
+                if is_preserved_name "$name"; then
+                  continue
+                fi
+                mv -- "$entry" "$move_dest/"
+              done
+            }
+
+            restore_inplace() {
+              if [ "$phase" = "moving-new" ] && [ -f "$prev/.release-names" ]; then
+                while IFS= read -r name; do
+                  case $name in
+                    ''|.|..|*/*|*..*) continue ;;
+                  esac
+                  if is_preserved_name "$name"; then
+                    continue
+                  fi
+                  if [ -e "$remote/$name" ] || [ -L "$remote/$name" ]; then
+                    rm -rf -- "$remote/$name"
+                  fi
+                done < "$prev/.release-names"
+              fi
+              if [ -d "$prev" ]; then
+                for entry in "$prev"/* "$prev"/.[!.]* "$prev"/..?*; do
+                  if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                    continue
+                  fi
+                  name=${entry##*/}
+                  case $name in
+                    .release-names) continue ;;
+                  esac
+                  mv -- "$entry" "$remote/"
+                done
+              fi
+            }
+
+            cleanup() {
+              status=$?
+              trap - EXIT
+              if [ "$status" -ne 0 ] && [ "$swapped" != "1" ]; then
+                if [ "$phase" = "moving-old" ] || [ "$phase" = "moving-new" ]; then
+                  restore_inplace || echo "CRITICAL: could not restore the previous tree." >&2
+                fi
+                if [ "$phase" = "swapping" ] && [ ! -d "$remote" ] && [ -d "$prev" ]; then
+                  mv -- "$prev" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                fi
+                if [ -n "$stage" ] && [ -d "$stage" ]; then
+                  if [ -f "$remote/.env" ] && [ -d "$remote/storage" ]; then
+                    assert_work_dir "$stage"
+                    rm -rf -- "$stage"
+                  else
+                    echo "Leaving the stage directory in place because live .env or storage is missing." >&2
+                  fi
+                fi
+              fi
+              if [ "$status" -ne 0 ]; then
+                exit "$status"
+              fi
+            }
+            trap cleanup EXIT
+
+            if [ -e "$stage" ]; then
+              if [ ! -f "$remote/.env" ] || [ ! -d "$remote/storage" ]; then
+                reject "Leftover stage exists and live .env or storage is missing."
+              fi
+              assert_work_dir "$stage"
+              rm -rf -- "$stage"
+            fi
+            discard_previous
+
+            echo "Deploying archive $archive"
+            mkdir -m 700 "$stage"
+            unzip -q "$remote/$archive" -d "$stage"
+            if [ ! -f "$stage/artisan" ] || [ ! -d "$stage/vendor" ] || [ ! -d "$stage/config" ] || [ ! -d "$stage/public" ]; then
+              reject "Archive is missing artisan, vendor, config, or public."
+            fi
+            if [ -d "$stage/bootstrap/cache" ]; then
+              for entry in "$stage/bootstrap/cache"/* "$stage/bootstrap/cache"/.[!.]*; do
+                if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                  continue
+                fi
+                name=${entry##*/}
+                if [ "$name" = ".gitignore" ]; then
+                  continue
+                fi
+                rm -rf -- "$entry"
+              done
+            fi
+
+            if [ -d "$remote/public/storage" ] && [ ! -L "$remote/public/storage" ]; then
+              mkdir -p "$remote/storage/app/public"
+              cp -a "$remote/public/storage/." "$remote/storage/app/public/"
+            fi
+            if [ -f "$remote/.user.ini" ]; then
+              cp -a "$remote/.user.ini" "$stage/.user.ini"
+            fi
+            if [ -f "$remote/php.ini" ]; then
+              cp -a "$remote/php.ini" "$stage/php.ini"
+            fi
+            if [ -f "$remote/.php-version" ]; then
+              cp -a "$remote/.php-version" "$stage/.php-version"
+            fi
+            if [ -d "$remote/cgi-bin" ]; then
+              rm -rf -- "$stage/cgi-bin"
+              cp -a "$remote/cgi-bin" "$stage/cgi-bin"
+            fi
+            if [ -f "$remote/public/.user.ini" ] && [ -d "$stage/public" ]; then
+              cp -a "$remote/public/.user.ini" "$stage/public/.user.ini"
+            fi
+
+            if [ -f "$remote/.env" ]; then
+              rm -f -- "$stage/.env"
+              cp -a -l "$remote/.env" "$stage/.env"
+              echo "Preserved server .env."
+              rm -f -- "$remote/$archive"
+            elif [ ! -f "$stage/.env" ]; then
+              reject "No .env on the server or in the archive."
+            else
+              echo "No server .env found; keeping the .env from the archive."
+            fi
+
+            if [ -d "$remote/storage" ]; then
+              if [ "$stage/storage" = "$remote/storage" ]; then
+                reject "Stage storage resolved to the live storage."
+              fi
+              rm -rf -- "$stage/storage"
+              cp -a -l "$remote/storage" "$stage/storage"
+              echo "Preserved server storage."
+            elif [ ! -d "$stage/storage" ]; then
+              reject "No storage directory on the server or in the archive."
+            else
+              echo "No server storage directory; keeping storage from the archive."
+            fi
+
+            mkdir -p \
+              "$stage/storage/framework/cache/data" \
+              "$stage/storage/framework/sessions" \
+              "$stage/storage/framework/views" \
+              "$stage/storage/app/public" \
+              "$stage/storage/logs" \
+              "$stage/bootstrap/cache"
+            chmod 600 "$stage/.env"
+            chmod -R u+rwX "$stage/storage" "$stage/bootstrap/cache"
+
+            if [ "$use_sibling" = "1" ]; then
+              cd "$parent"
+              phase=swapping
+              mv -- "$remote" "$prev"
+              if ! mv -- "$stage" "$remote"; then
+                mv -- "$prev" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                exit 1
+              fi
+            else
+              phase=moving-old
+              mkdir -m 700 "$prev"
+              move_dest=$prev
+              move_unpreserved "$remote"
+              : > "$prev/.release-names"
+              for entry in "$stage"/* "$stage"/.[!.]* "$stage"/..?*; do
+                if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                  continue
+                fi
+                name=${entry##*/}
+                if is_preserved_name "$name"; then
+                  continue
+                fi
+                printf '%s\n' "$name" >> "$prev/.release-names"
+              done
+              phase=moving-new
+              move_dest=$remote
+              move_unpreserved "$stage"
+            fi
+
+            swapped=1
+            phase=live
+            if [ -d "$stage" ]; then
+              if [ ! -f "$remote/.env" ] || [ ! -d "$remote/storage" ]; then
+                reject "Refusing to discard stage because live .env or storage is missing."
+              fi
+              assert_work_dir "$stage"
+              rm -rf -- "$stage"
+            fi
+            cd "$remote"
+            mkdir -p \
+              storage/framework/cache/data \
+              storage/framework/sessions \
+              storage/framework/views \
+              storage/app/public \
+              storage/logs \
+              bootstrap/cache
+            if [ -f "$remote/$archive" ]; then
+              rm -f -- "$remote/$archive"
+            fi
+            if [ -f "$prev/$archive" ]; then
+              rm -f -- "$prev/$archive"
+            fi
             chmod 600 .env
-            mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/app/public storage/logs bootstrap/cache
-            chmod -R u+rwX storage bootstrap/cache
-            "$INVESTMENTS_PHP_BIN" artisan migrate --force
-            "$INVESTMENTS_PHP_BIN" artisan storage:link --relative --force
-            "$INVESTMENTS_PHP_BIN" artisan optimize:clear
-            "$INVESTMENTS_PHP_BIN" artisan config:cache
-            "$INVESTMENTS_PHP_BIN" artisan route:cache
-            "$INVESTMENTS_PHP_BIN" artisan event:cache
+            "$php" artisan optimize:clear
+            "$php" artisan migrate --force
+            "$php" artisan storage:link --relative --force
+            "$php" artisan config:cache
+            "$php" artisan route:cache
+            "$php" artisan event:cache
             chmod 600 .env bootstrap/cache/config.php
+            if [ ! -f "$remote/.env" ] || [ ! -d "$remote/storage" ]; then
+              reject "Live .env or storage disappeared before cleanup."
+            fi
+            discard_previous
+            echo "Swapped application tree."
+            echo "Removed previous release."
 
       - name: Verify public site
         env:
