@@ -214,6 +214,7 @@ jobs:
       # unzip -o leaves files the new release removed. Laravel then loads every
       # config/*.php, so a leftover config/sanctum.php 500s once Sanctum is gone.
       - name: Swap release, migrate, and cache
+        id: swap
         uses: appleboy/ssh-action@master
         env:
           INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
@@ -528,7 +529,59 @@ jobs:
             chmod 600 "$stage/.env"
             chmod -R u+rwX "$stage/storage" "$stage/bootstrap/cache"
 
+            # The stage directory stays 0700 until the tree is complete. LiteSpeed
+            # does not run as the account user, so the directory that becomes
+            # public_html must be 755. A docroot left at 0700 by the previous
+            # deploy is not copied forward.
+            doc_mode=$(stat -c '%a' "$remote")
+            case $doc_mode in
+              700|0700) doc_mode=755 ;;
+            esac
+            case $doc_mode in
+              *1|*3|*5|*7) ;;
+              *) doc_mode=755 ;;
+            esac
+
+            rollback_swapped_tree() {
+              if [ "$use_sibling" = "1" ]; then
+                cd "$parent" || return 1
+                bad=$parent/.investbrain-failed
+                if [ -e "$bad" ]; then
+                  echo "CRITICAL: failed-release directory already exists." >&2
+                  return 1
+                fi
+                if [ -d "$remote" ]; then
+                  mv -- "$remote" "$bad" || return 1
+                fi
+                if [ -d "$prev" ]; then
+                  if ! mv -- "$prev" "$remote"; then
+                    if [ ! -e "$remote" ] && [ -d "$bad" ]; then
+                      mv -- "$bad" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                    fi
+                    return 1
+                  fi
+                elif [ ! -e "$remote" ] && [ -d "$bad" ]; then
+                  mv -- "$bad" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                  return 1
+                fi
+                if [ -d "$bad" ] && [ -f "$remote/.env" ] && [ -d "$remote/storage" ] && [ -f "$bad/.env" ] && [ "$(stat -c '%i' "$bad/.env")" = "$(stat -c '%i' "$remote/.env")" ]; then
+                  if find "$bad/storage" -type f -links 1 -print -quit | grep -q .; then
+                    echo "Leaving the failed tree in place because storage is not fully linked." >&2
+                  else
+                    case $bad in
+                      */.investbrain-failed) rm -rf -- "$bad" ;;
+                      *) echo "Refusing to delete an unexpected path." >&2; return 1 ;;
+                    esac
+                  fi
+                fi
+              else
+                phase=moving-new
+                restore_inplace
+              fi
+            }
+
             if [ "$use_sibling" = "1" ]; then
+              chmod "$doc_mode" "$stage"
               cd "$parent"
               phase=swapping
               mv -- "$remote" "$prev"
@@ -556,6 +609,19 @@ jobs:
               move_dest=$remote
               move_unpreserved "$stage"
             fi
+
+            chmod "$doc_mode" "$remote"
+            final_mode=$(stat -c '%a' "$remote")
+            case $final_mode in
+              755|0755) ;;
+              *)
+                echo "Document root mode is $final_mode, expected 755. Rolling back." >&2
+                rollback_swapped_tree || echo "CRITICAL: rollback failed." >&2
+                phase=live
+                exit 1
+                ;;
+            esac
+            echo "Document root mode is $final_mode."
 
             swapped=1
             phase=live
@@ -591,11 +657,11 @@ jobs:
             if [ ! -f "$remote/.env" ] || [ ! -d "$remote/storage" ]; then
               reject "Live .env or storage disappeared before cleanup."
             fi
-            discard_previous
             echo "Swapped application tree."
-            echo "Removed previous release."
+            echo "Previous tree kept until HTTP checks pass."
 
       - name: Verify public site
+        id: verify
         env:
           SOURCE_SHA: ${{ steps.release.outputs.sha }}
         run: |
@@ -625,3 +691,161 @@ jobs:
             exit 1
           fi
           echo "Public checks passed for ${SOURCE_SHA}."
+
+      - name: Remove previous release
+        if: ${{ success() }}
+        uses: appleboy/ssh-action@master
+        env:
+          INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
+        with:
+          host: ${{ secrets.SSH_REMOTE_HOST }}
+          username: ${{ secrets.SSH_REMOTE_USER }}
+          password: ${{ secrets.SSH_REMOTE_PASSWORD }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
+          command_timeout: 10m
+          script_stop: true
+          envs: INVESTMENTS_SSH_REMOTE_PATH
+          script: |
+            set -eu
+            remote=$INVESTMENTS_SSH_REMOTE_PATH
+            case $remote in
+              /[A-Za-z0-9._/-]*) ;;
+              *) echo "Remote path is not an absolute path with safe characters." >&2; exit 1 ;;
+            esac
+            case $remote in
+              *..*|*/) echo "Remote path is not allowed." >&2; exit 1 ;;
+            esac
+            if [ ! -d "$remote" ] || [ -L "$remote" ]; then
+              echo "Remote path is not a real directory." >&2
+              exit 1
+            fi
+            parent=$(dirname "$remote")
+            if [ -d "$parent/.investbrain-previous" ]; then
+              prev=$parent/.investbrain-previous
+            elif [ -d "$remote/.investbrain-previous" ]; then
+              prev=$remote/.investbrain-previous
+            else
+              echo "No previous tree to remove."
+              exit 0
+            fi
+            case $prev in
+              */.investbrain-previous) ;;
+              *) echo "Refusing to delete an unexpected path." >&2; exit 1 ;;
+            esac
+            if [ -f "$prev/.env" ]; then
+              if [ ! -f "$remote/.env" ]; then
+                echo "Previous tree has .env but the live tree does not." >&2
+                exit 1
+              fi
+              if [ "$(stat -c '%i' "$prev/.env")" != "$(stat -c '%i' "$remote/.env")" ]; then
+                echo "Previous .env is not the live server .env." >&2
+                exit 1
+              fi
+              rm -f -- "$prev/.env"
+            fi
+            if [ -e "$prev/storage" ]; then
+              if [ ! -d "$remote/storage" ]; then
+                echo "Previous tree has storage but the live tree does not." >&2
+                exit 1
+              fi
+              if find "$prev/storage" -type f -links 1 -print -quit | grep -q .; then
+                echo "Previous storage has a file that is not linked into the live tree." >&2
+                exit 1
+              fi
+              rm -rf -- "$prev/storage"
+            fi
+            if [ -e "$prev/.env" ] || [ -e "$prev/storage" ]; then
+              echo "Previous tree still holds .env or storage." >&2
+              exit 1
+            fi
+            rm -rf -- "$prev"
+            echo "Removed previous release."
+
+      - name: Roll back previous release
+        if: ${{ failure() && steps.swap.outcome == 'success' && steps.verify.outcome == 'failure' }}
+        uses: appleboy/ssh-action@master
+        env:
+          INVESTMENTS_SSH_REMOTE_PATH: ${{ secrets.INVESTMENTS_SSH_REMOTE_PATH }}
+        with:
+          host: ${{ secrets.SSH_REMOTE_HOST }}
+          username: ${{ secrets.SSH_REMOTE_USER }}
+          password: ${{ secrets.SSH_REMOTE_PASSWORD }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
+          command_timeout: 10m
+          script_stop: true
+          envs: INVESTMENTS_SSH_REMOTE_PATH
+          script: |
+            set -eu
+            remote=$INVESTMENTS_SSH_REMOTE_PATH
+            case $remote in
+              /[A-Za-z0-9._/-]*) ;;
+              *) echo "Remote path is not an absolute path with safe characters." >&2; exit 1 ;;
+            esac
+            case $remote in
+              *..*|*/) echo "Remote path is not allowed." >&2; exit 1 ;;
+            esac
+            if [ ! -d "$remote" ] || [ -L "$remote" ]; then
+              echo "Remote path is not a real directory." >&2
+              exit 1
+            fi
+            parent=$(dirname "$remote")
+            if [ -d "$parent/.investbrain-previous" ] && [ -f "$parent/.investbrain-previous/artisan" ]; then
+              prev=$parent/.investbrain-previous
+              bad=$parent/.investbrain-failed
+              if [ -e "$bad" ]; then
+                echo "CRITICAL: failed-release directory already exists." >&2
+                exit 1
+              fi
+              cd "$parent"
+              mv -- "$remote" "$bad"
+              if ! mv -- "$prev" "$remote"; then
+                mv -- "$bad" "$remote" || echo "CRITICAL: live directory was not restored." >&2
+                exit 1
+              fi
+              if [ -f "$bad/.env" ] && [ -f "$remote/.env" ] && [ "$(stat -c '%i' "$bad/.env")" = "$(stat -c '%i' "$remote/.env")" ] && [ -d "$bad/storage" ] && [ -d "$remote/storage" ]; then
+                if find "$bad/storage" -type f -links 1 -print -quit | grep -q .; then
+                  echo "Rolled back. Leaving the failed tree because storage is not fully linked." >&2
+                  exit 0
+                fi
+                case $bad in
+                  */.investbrain-failed) rm -rf -- "$bad" ;;
+                  *) echo "Refusing to delete an unexpected path." >&2; exit 1 ;;
+                esac
+              fi
+              echo "Rolled back to the previous tree."
+              exit 0
+            fi
+            if [ -d "$remote/.investbrain-previous" ] && [ -f "$remote/.investbrain-previous/artisan" ]; then
+              prev=$remote/.investbrain-previous
+              case $prev in
+                */.investbrain-previous) ;;
+                *) echo "Refusing to restore from an unexpected path." >&2; exit 1 ;;
+              esac
+              if [ -f "$prev/.release-names" ]; then
+                while IFS= read -r name; do
+                  case $name in
+                    ''|.|..|*/*|*..*|.env|storage) continue ;;
+                  esac
+                  if [ -e "$remote/$name" ] || [ -L "$remote/$name" ]; then
+                    rm -rf -- "$remote/$name"
+                  fi
+                done < "$prev/.release-names"
+              fi
+              for entry in "$prev"/* "$prev"/.[!.]* "$prev"/..?*; do
+                if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+                  continue
+                fi
+                name=${entry##*/}
+                case $name in
+                  .|..|.env|storage|.release-names) continue ;;
+                esac
+                mv -- "$entry" "$remote/"
+              done
+              if [ ! -e "$prev/.env" ] && [ ! -e "$prev/storage" ]; then
+                rm -rf -- "$prev"
+              fi
+              echo "Rolled back to the previous tree."
+              exit 0
+            fi
+            echo "No previous tree to restore." >&2
+            exit 1
