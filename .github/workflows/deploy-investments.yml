@@ -1,10 +1,17 @@
 # Manual only. Do not add push, pull_request, or schedule triggers.
-# The site and secrets do not exist yet, so a push must not deploy.
+# Source is AlexandreBellas/investbrain, not upstream investbrainapp/investbrain releases.
+# Default ref is that fork's main HEAD, resolved to a commit SHA before download.
 
 name: Deploy Investments
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA on AlexandreBellas/investbrain. Empty deploys main HEAD."
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,30 +28,74 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download latest release
+      - name: Resolve fork commit and download source
         id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed via env so the value is never interpolated into the script.
+          REQUESTED_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          tag="$(curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            https://api.github.com/repos/investbrainapp/investbrain/releases/latest \
-            | jq -er .tag_name)"
-          if [[ ! "${tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "Unexpected release tag: ${tag}" >&2
+          repo="AlexandreBellas/investbrain"
+          ref="${REQUESTED_REF:-}"
+          if [[ -z "${ref}" ]]; then
+            ref="main"
+          fi
+          if [[ "${#ref}" -gt 255 || ! "${ref}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Ref may only contain letters, numbers, and the characters . _ / - (max 255)." >&2
             exit 1
           fi
+          IFS='/' read -ra ref_parts <<< "${ref}"
+          if [[ "${#ref_parts[@]}" -eq 0 ]]; then
+            echo "Ref is not a valid git ref." >&2
+            exit 1
+          fi
+          for part in "${ref_parts[@]}"; do
+            if [[ -z "${part}" || "${part}" == "." || "${part}" == ".." ]]; then
+              echo "Ref is not a valid git ref." >&2
+              exit 1
+            fi
+          done
+
+          echo "Resolving ${repo} ref ${ref}"
+          encoded="$(jq -rn --arg r "${ref}" '$r|@uri')"
+          sha="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${repo}/commits/${encoded}" \
+            | jq -er '.sha')"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GitHub did not return a full commit SHA." >&2
+            exit 1
+          fi
+          # A hex-only ref is a SHA. Require GitHub to return that commit.
+          if [[ "${ref}" =~ ^[0-9a-fA-F]+$ ]]; then
+            wanted="$(printf '%s' "${ref}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "${#wanted}" -lt 7 || "${sha}" != "${wanted}"* ]]; then
+              echo "Resolved commit does not match the requested SHA." >&2
+              exit 1
+            fi
+          fi
+
           mkdir -p build
           curl -fL --retry 3 --retry-delay 2 -o build/source.zip \
-            "https://github.com/investbrainapp/investbrain/archive/refs/tags/${tag}.zip"
+            "https://github.com/${repo}/archive/${sha}.zip"
           {
-            echo "tag=${tag}"
-            echo "archive=Investments-${tag}.zip"
+            echo "sha=${sha}"
+            echo "archive=Investments-${sha}.zip"
           } >> "${GITHUB_OUTPUT}"
+          echo "Source commit: ${sha}"
+          echo "Archive: Investments-${sha}.zip"
+          {
+            echo "### Investbrain source"
+            echo ""
+            echo "- Repository: \`${repo}\`"
+            echo "- Requested ref: \`${ref}\`"
+            echo "- Commit: \`${sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      # v1.3.1 locks Symfony 8.1, which requires PHP >= 8.4.1.
+      # The fork's composer.json requires PHP ^8.4.
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -177,6 +228,7 @@ jobs:
           script: |
             set -eu
             cd "$INVESTMENTS_SSH_REMOTE_PATH"
+            echo "Deploying archive ${ARCHIVE}"
             unzip -o "$ARCHIVE"
             rm -f "$ARCHIVE"
             chmod 600 .env
@@ -189,3 +241,34 @@ jobs:
             "$INVESTMENTS_PHP_BIN" artisan route:cache
             "$INVESTMENTS_PHP_BIN" artisan event:cache
             chmod 600 .env bootstrap/cache/config.php
+
+      - name: Verify public site
+        env:
+          SOURCE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          base="https://investments.alebatistella.com"
+          login_code=""
+          dividend_code=""
+          for attempt in 1 2 3 4 5 6; do
+            login_code="$(curl -sS -o /tmp/login.html -w '%{http_code}' --max-time 30 "${base}/login" || true)"
+            dividend_code="$(curl -sS -o /tmp/dividend.body -w '%{http_code}' --max-time 30 "${base}/api/dividend" || true)"
+            echo "attempt=${attempt} source=${SOURCE_SHA} login_http=${login_code} dividend_http=${dividend_code}"
+            if [[ "${login_code}" == "200" && "${dividend_code}" == "401" ]]; then
+              break
+            fi
+            sleep 5
+          done
+          if [[ "${login_code}" != "200" ]]; then
+            echo "Login page returned HTTP ${login_code}, expected 200." >&2
+            exit 1
+          fi
+          if ! grep -qiE 'type="password"|name="password"' /tmp/login.html; then
+            echo "Login response was HTTP 200 but had no password field." >&2
+            exit 1
+          fi
+          if [[ "${dividend_code}" != "401" ]]; then
+            echo "GET /api/dividend returned HTTP ${dividend_code}, expected 401." >&2
+            exit 1
+          fi
+          echo "Public checks passed for ${SOURCE_SHA}."
