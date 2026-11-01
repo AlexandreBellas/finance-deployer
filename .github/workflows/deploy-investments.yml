@@ -370,6 +370,22 @@ jobs:
               esac
             }
 
+            # optimize:clear deletes compiled views and file-cache entries from the
+            # live tree after the hardlink. Those names stay in the previous tree
+            # with nlink 1. Logs, sessions, cache, and views are disposable.
+            # Any other unique file, including Passport keys and uploads, blocks
+            # deletion so the only copy is never removed.
+            unique_storage_files() {
+              dir=$1
+              shift
+              find "$dir" -type f -links 1 \
+                ! -path '*/storage/logs/*' \
+                ! -path '*/storage/framework/cache/*' \
+                ! -path '*/storage/framework/sessions/*' \
+                ! -path '*/storage/framework/views/*' \
+                "$@"
+            }
+
             discard_previous() {
               if [ ! -e "$prev" ]; then
                 return 0
@@ -388,7 +404,9 @@ jobs:
                 if [ ! -d "$remote/storage" ]; then
                   reject "Previous tree has storage but the live tree does not."
                 fi
-                if find "$prev/storage" -type f -links 1 -print -quit | grep -q .; then
+                if unique_storage_files "$prev/storage" -print -quit | grep -q .; then
+                  echo "Previous storage has a file that is not linked into the live tree:" >&2
+                  unique_storage_files "$prev/storage" -printf '%P\n' >&2
                   reject "Previous storage has a file that is not linked into the live tree."
                 fi
                 rm -rf -- "$prev/storage"
@@ -917,13 +935,28 @@ jobs:
               fi
               rm -f -- "$prev/.env"
             fi
+            # Same rule as discard_previous in the swap step. optimize:clear
+            # leaves compiled views and file cache only in this tree. Logs,
+            # sessions, cache, and views may be removed. Passport keys, uploads,
+            # and any other unique file must not.
+            unique_storage_files() {
+              dir=$1
+              shift
+              find "$dir" -type f -links 1 \
+                ! -path '*/storage/logs/*' \
+                ! -path '*/storage/framework/cache/*' \
+                ! -path '*/storage/framework/sessions/*' \
+                ! -path '*/storage/framework/views/*' \
+                "$@"
+            }
             if [ -e "$prev/storage" ]; then
               if [ ! -d "$remote/storage" ]; then
                 echo "Previous tree has storage but the live tree does not." >&2
                 exit 1
               fi
-              if find "$prev/storage" -type f -links 1 -print -quit | grep -q .; then
-                echo "Previous storage has a file that is not linked into the live tree." >&2
+              if unique_storage_files "$prev/storage" -print -quit | grep -q .; then
+                echo "Previous storage has a file that is not linked into the live tree:" >&2
+                unique_storage_files "$prev/storage" -printf '%P\n' >&2
                 exit 1
               fi
               rm -rf -- "$prev/storage"
@@ -935,6 +968,8 @@ jobs:
             rm -rf -- "$prev"
             echo "Removed previous release."
 
+      # Cleanup above runs only after Verify passes. A failure there must
+      # leave the new release in place. Rollback runs only when Verify failed.
       - name: Roll back previous release
         if: ${{ failure() && steps.swap.outcome == 'success' && steps.verify.outcome == 'failure' }}
         uses: appleboy/ssh-action@v1.2.5
